@@ -22,6 +22,7 @@ from .search_engine import (
     search_box,
     get_suggestions,
     get_box_type_text,
+    get_box_image_url,
     load_character_data,
     load_search_words,
     refresh_character_data,
@@ -37,7 +38,7 @@ log = logging.getLogger("amiyabot-arknights-authentication")
 # ============== 插件实例 ==============
 bot = AmiyaBotPluginInstance(
     name="明日方舟通行证查询",
-    version="1.0",
+    version="1.1",
     plugin_id="amiyabot-arknights-authentication",
     description="查询明日方舟通行证干员信息和盒号信息",
     global_config_schema=f'{curr_dir}/config_schema.json',
@@ -266,25 +267,41 @@ async def _handle_character_search(data: Message, keyword: str):
         )
 
     lines = [f"🔍 「{keyword}」的查询结果（共 {len(results)} 条）：\n"]
+    image_url = None
     for r in results[:10]:
         name = r["characterName"]
-        boxes = r.get("boxIds", [])
+        boxes = r.get("boxes", [])
         match_t = r.get("matchType", "chinese")
         match_text = MATCH_TYPE_TEXT.get(match_t, "")
         if match_text:
             match_text = f"（{match_text}匹配）"
         only_e1 = " [仅精一]" if r.get("nolyELITE1") else ""
         hot = " 🔥" if r.get("hotcharacter") else ""
-        boxes_str = "、".join(str(b) for b in boxes) if boxes else "未找到盒号"
+        boxes_str = "、".join(b["boxId"] for b in boxes) if boxes else "未找到盒号"
         lines.append(f"• {name}{hot}{only_e1}\n  所在盒号：{boxes_str}\n  {match_text}\n")
+
+        # 如果只有一个盒且有图片，记录下来
+        if len(boxes) == 1 and boxes[0].get("imageUrl"):
+            image_url = boxes[0]["imageUrl"]
 
     if len(results) > 10:
         lines.append(f"\n…还有 {len(results) - 10} 条结果未显示。")
+
+    # 多盒时提示用户可以查大图
+    if not image_url:
+        all_box_ids = [b["boxId"] for r in results[:10] for b in r.get("boxes", [])]
+        if all_box_ids:
+            examples = "、".join(f"「查官图{bid}」" for bid in all_box_ids[:3])
+            lines.append(f"\n阿米娅为博士准备了以上 {len(all_box_ids)} 盒的通行证大图，例如{examples}等")
+
     lines.append("\n输入其他干员名继续查询，或 b 返回上级。")
 
     clear_state(str(data.user_id))
     state.step = "search_by_char"
-    return Chain(data).text("".join(lines))
+    chain = Chain(data).text("".join(lines))
+    if image_url:
+        chain = chain.image(url=image_url)
+    return chain
 
 
 async def _handle_box_search(data: Message, keyword: str):
@@ -350,7 +367,11 @@ async def _handle_box_search(data: Message, keyword: str):
 
     clear_state(str(data.user_id))
     state.step = "search_by_box"
-    return Chain(data).text("".join(lines))
+    chain = Chain(data).text("".join(lines))
+    # 查盒号时附带大图
+    if results and results[0].get("imageUrl"):
+        chain = chain.image(url=results[0]["imageUrl"])
+    return chain
 
 
 # ============== 入口命令 ==============
@@ -399,22 +420,36 @@ async def direct_character_search(data: Message):
         return Chain(data).text(f"未找到与「{keyword}」相关的干员。")
 
     lines = [f"🔍 「{keyword}」的查询结果：\n"]
+    image_url = None
     for r in results[:5]:
         name = r["characterName"]
-        boxes = r.get("boxIds", [])
+        boxes = r.get("boxes", [])
         match_t = r.get("matchType", "chinese")
         match_text = MATCH_TYPE_TEXT.get(match_t, "")
         if match_text:
             match_text = f"（{match_text}匹配）"
         only_e1 = " [仅精一]" if r.get("nolyELITE1") else ""
         hot = " 🔥" if r.get("hotcharacter") else ""
-        boxes_str = "、".join(str(b) for b in boxes) if boxes else "未找到盒号"
+        boxes_str = "、".join(b["boxId"] for b in boxes) if boxes else "未找到盒号"
         lines.append(f"• {name}{hot}{only_e1}\n  盒号：{boxes_str}\n  {match_text}\n")
+
+        if len(boxes) == 1 and boxes[0].get("imageUrl"):
+            image_url = boxes[0]["imageUrl"]
 
     if len(results) > 5:
         lines.append(f"\n…还有 {len(results) - 5} 条结果。")
 
-    return Chain(data).text("".join(lines))
+    # 多盒时提示查大图
+    if not image_url:
+        all_box_ids = [b["boxId"] for r in results[:5] for b in r.get("boxes", [])]
+        if all_box_ids:
+            examples = "、".join(f"「查官图{bid}」" for bid in all_box_ids[:3])
+            lines.append(f"\n阿米娅为博士准备了以上 {len(all_box_ids)} 盒的通行证大图，例如{examples}等")
+
+    chain = Chain(data).text("".join(lines))
+    if image_url:
+        chain = chain.image(url=image_url)
+    return chain
 
 
 @bot.on_message(keywords=["通行证查盒号", "通行证查询盒号", "兔兔通行证查盒号", "兔兔通行证查询盒号"], verify=_verify_direct_box, allow_direct=True)
@@ -452,7 +487,48 @@ async def direct_box_search(data: Message):
     if len(results) > 3:
         lines.append(f"\n…还有 {len(results) - 3} 个相同盒号。")
 
-    return Chain(data).text("".join(lines))
+    chain = Chain(data).text("".join(lines))
+    if results and results[0].get("imageUrl"):
+        chain = chain.image(url=results[0]["imageUrl"])
+    return chain
+
+
+# ============== 查官图（大图查询）===============
+async def _verify_official_image(data: Message):
+    text = data.text.strip()
+    return "查官图" in text
+
+
+@bot.on_message(verify=_verify_official_image, allow_direct=True)
+async def search_official_image(data: Message):
+    """处理「查官图XX」或「兔兔 查官图XX」的请求"""
+    log.info(f"[official_image] user_id={data.user_id} text={data.text!r}")
+    text = data.text.strip()
+
+    # 提取盒号
+    box_id = None
+    for kw in ("查官图", "兔兔查官图", "兔兔 查官图"):
+        if kw in text:
+            box_id = text.split(kw, 1)[-1].strip()
+            break
+
+    if not box_id:
+        return Chain(data).text("用法：查官图 <盒号>\n例如：查官图 1、查官图 W-01")
+
+    # 先尝试从 search_box 结果获取图片 URL
+    results = await search_box(box_id)
+    image_url = None
+    if results:
+        image_url = results[0].get("imageUrl")
+
+    # 如果 search_box 没有，尝试直接查找
+    if not image_url:
+        image_url = await get_box_image_url(box_id)
+
+    if not image_url:
+        return Chain(data).text(f"未找到盒号「{box_id}」的通行证大图。")
+
+    return Chain(data).text(f"📦 盒号 {box_id} 的通行证大图：").image(url=image_url)
 
 
 # ============== 数据刷新（使用新 refresh 函数，区分网络成功/失败提示）===============
