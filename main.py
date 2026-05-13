@@ -40,7 +40,9 @@ bot = AmiyaBotPluginInstance(
     name="明日方舟通行证查询",
     version="1.1",
     plugin_id="amiyabot-arknights-authentication",
+    plugin_type='',
     description="查询明日方舟通行证干员信息和盒号信息",
+    document=f'{curr_dir}/README.md',
     global_config_schema=f'{curr_dir}/config_schema.json',
     global_config_default=f'{curr_dir}/config_default.yaml',
 )
