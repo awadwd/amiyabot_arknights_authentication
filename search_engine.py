@@ -518,7 +518,7 @@ async def search_character(
             if key not in result_map:
                 result_map[key] = {
                     "characterName": char_name,
-                    "boxIds": [],
+                    "boxes": [],
                     "matchType": match_type,
                     "hotcharacter": box.get("hotcharacter") or box.get("isHot"),
                     "nolyELITE1": bool(
@@ -528,8 +528,11 @@ async def search_character(
                     ),
                 }
 
-            if box_id not in result_map[key]["boxIds"]:
-                result_map[key]["boxIds"].append(box_id)
+            if box_id not in [b["boxId"] for b in result_map[key]["boxes"]]:
+                result_map[key]["boxes"].append({
+                    "boxId": box_id,
+                    "imageUrl": box.get("Box_ImageUrl") or box.get("Box_imageUrl") or None,
+                })
 
     return list(result_map.values())
 
@@ -569,9 +572,21 @@ async def search_box(keyword: str) -> list:
                 "boxId": box_id,
                 "boxType": box_type,
                 "characters": chars,
+                "imageUrl": box.get("Box_ImageUrl") or box.get("Box_imageUrl") or None,
             })
 
     return results
+
+
+# ============== 按盒号查大图 ==============
+async def get_box_image_url(box_id: str) -> Optional[str]:
+    """根据盒号查找对应的大图 URL"""
+    data = await load_character_data()
+    for box in data:
+        bid = str(box.get("Box_id") or box.get("box_id") or "")
+        if bid.lower() == box_id.strip().lower():
+            return box.get("Box_ImageUrl") or box.get("Box_imageUrl") or None
+    return None
 
 
 # ============== 模糊提示（预留）==============
